@@ -28,8 +28,6 @@ import {
   Target,
   Sparkles,
   Pause,
-  SkipForward,
-  SkipBack,
   ChevronLeft,
   ChevronRight,
   Repeat
@@ -281,13 +279,12 @@ const methodData: Day[] = [
   }
 ]
 
-// Sonidos con URLs reales de archivos de audio
+// Sonidos con configuración mejorada
 const sounds = [
   { 
     id: 'white-noise', 
     name: 'Ruido Blanco', 
     description: 'Sonido constante que bloquea ruidos externos',
-    url: 'https://www.soundjay.com/misc/sounds/white-noise-1.mp3',
     duration: 300, // 5 minutos
     frequency: '20Hz-20kHz'
   },
@@ -295,7 +292,6 @@ const sounds = [
     id: 'rain', 
     name: 'Lluvia Suave', 
     description: 'Sonido relajante de lluvia ligera',
-    url: 'https://www.soundjay.com/nature/sounds/rain-01.mp3',
     duration: 480, // 8 minutos
     frequency: 'Natural'
   },
@@ -303,7 +299,6 @@ const sounds = [
     id: 'lullaby', 
     name: 'Canción de Cuna', 
     description: 'Melodía suave instrumental',
-    url: 'https://www.soundjay.com/misc/sounds/lullaby-1.mp3',
     duration: 180, // 3 minutos
     frequency: 'Melódica'
   },
@@ -311,7 +306,6 @@ const sounds = [
     id: 'ocean', 
     name: 'Olas del Océano', 
     description: 'Sonido rítmico de olas suaves',
-    url: 'https://www.soundjay.com/nature/sounds/ocean-waves-1.mp3',
     duration: 600, // 10 minutos
     frequency: 'Natural'
   },
@@ -319,7 +313,6 @@ const sounds = [
     id: 'heartbeat', 
     name: 'Latido Cardíaco', 
     description: 'Simula el latido materno',
-    url: 'https://www.soundjay.com/misc/sounds/heartbeat-1.mp3',
     duration: 240, // 4 minutos
     frequency: '60-80 BPM'
   },
@@ -327,7 +320,6 @@ const sounds = [
     id: 'forest', 
     name: 'Bosque Tranquilo', 
     description: 'Sonidos suaves de la naturaleza',
-    url: 'https://www.soundjay.com/nature/sounds/forest-1.mp3',
     duration: 420, // 7 minutos
     frequency: 'Natural'
   }
@@ -343,7 +335,9 @@ export default function BabySerenityMethod() {
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const [isLooping, setIsLooping] = useState(false)
-  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null)
+  const gainNodeRef = useRef<GainNode | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // Calcular progreso total
@@ -375,7 +369,11 @@ export default function BabySerenityMethod() {
   // Función para generar audio sintético usando Web Audio API
   const generateSyntheticAudio = (type: string): AudioBuffer | null => {
     try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      }
+      
+      const audioContext = audioContextRef.current
       const sampleRate = audioContext.sampleRate
       const duration = 10 // 10 segundos de audio
       const buffer = audioContext.createBuffer(1, sampleRate * duration, sampleRate)
@@ -442,8 +440,9 @@ export default function BabySerenityMethod() {
     try {
       if (currentSound === soundId && isPlaying) {
         // Pausar
-        if (audioRef.current) {
-          audioRef.current.pause()
+        if (sourceNodeRef.current) {
+          sourceNodeRef.current.stop()
+          sourceNodeRef.current = null
         }
         setIsPlaying(false)
         if (intervalRef.current) {
@@ -453,9 +452,9 @@ export default function BabySerenityMethod() {
       }
 
       // Detener sonido actual si hay uno
-      if (audioRef.current) {
-        audioRef.current.pause()
-        audioRef.current = null
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.stop()
+        sourceNodeRef.current = null
       }
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
@@ -468,134 +467,61 @@ export default function BabySerenityMethod() {
       setIsPlaying(true)
       setCurrentTime(0)
 
-      // Intentar crear audio sintético usando Web Audio API
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+      // Crear contexto de audio si no existe
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      }
+
+      // Reanudar contexto si está suspendido
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume()
+      }
+
       const buffer = generateSyntheticAudio(soundId)
       
-      if (buffer) {
-        const source = audioContext.createBufferSource()
-        const gainNode = audioContext.createGain()
+      if (buffer && audioContextRef.current) {
+        const source = audioContextRef.current.createBufferSource()
+        const gainNode = audioContextRef.current.createGain()
         
         source.buffer = buffer
         source.loop = true
         gainNode.gain.value = volume[0] / 100
         
         source.connect(gainNode)
-        gainNode.connect(audioContext.destination)
+        gainNode.connect(audioContextRef.current.destination)
+        
+        sourceNodeRef.current = source
+        gainNodeRef.current = gainNode
         
         source.start()
-        setDuration(buffer.duration)
-
-        // Actualizar tiempo de reproducción
-        intervalRef.current = setInterval(() => {
-          setCurrentTime(prev => {
-            const newTime = prev + 1
-            if (newTime >= sound.duration) {
-              if (isLooping) {
-                // Reiniciar el sonido si está en loop
-                source.stop()
-                playSound(soundId) // Reproducir de nuevo
-                return 0
-              } else {
-                setIsPlaying(false)
-                setCurrentSound(null)
-                source.stop()
-                if (intervalRef.current) {
-                  clearInterval(intervalRef.current)
-                }
-                return 0
-              }
-            }
-            return newTime
-          })
-        }, 1000)
-
-        // Guardar referencia para poder parar el sonido
-        audioRef.current = {
-          pause: () => source.stop(),
-          volume: gainNode.gain.value
-        } as any
-
-      } else {
-        // Fallback: crear un audio HTML5 con data URL de audio sintético
-        const canvas = document.createElement('canvas')
-        const ctx = canvas.getContext('2d')
-        
-        // Crear un tono simple como fallback
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
-        const oscillator = audioContext.createOscillator()
-        const gainNode = audioContext.createGain()
-        
-        oscillator.connect(gainNode)
-        gainNode.connect(audioContext.destination)
-        
-        // Configurar el tipo de onda según el sonido
-        switch (soundId) {
-          case 'white-noise':
-            oscillator.type = 'sawtooth'
-            oscillator.frequency.setValueAtTime(200, audioContext.currentTime)
-            break
-          case 'rain':
-            oscillator.type = 'sawtooth'
-            oscillator.frequency.setValueAtTime(150, audioContext.currentTime)
-            break
-          case 'ocean':
-            oscillator.type = 'sine'
-            oscillator.frequency.setValueAtTime(80, audioContext.currentTime)
-            break
-          case 'heartbeat':
-            oscillator.type = 'square'
-            oscillator.frequency.setValueAtTime(70, audioContext.currentTime)
-            break
-          case 'lullaby':
-            oscillator.type = 'sine'
-            oscillator.frequency.setValueAtTime(440, audioContext.currentTime)
-            break
-          case 'forest':
-            oscillator.type = 'triangle'
-            oscillator.frequency.setValueAtTime(120, audioContext.currentTime)
-            break
-        }
-        
-        gainNode.gain.value = (volume[0] / 100) * 0.1 // Volumen más bajo
-        oscillator.start()
-        
         setDuration(sound.duration)
 
         // Actualizar tiempo de reproducción
         intervalRef.current = setInterval(() => {
           setCurrentTime(prev => {
             const newTime = prev + 1
-            if (newTime >= sound.duration) {
-              if (isLooping) {
-                // Reiniciar el sonido si está en loop
-                oscillator.stop()
-                playSound(soundId) // Reproducir de nuevo
-                return 0
-              } else {
-                setIsPlaying(false)
-                setCurrentSound(null)
-                oscillator.stop()
-                if (intervalRef.current) {
-                  clearInterval(intervalRef.current)
-                }
-                return 0
+            if (newTime >= sound.duration && !isLooping) {
+              setIsPlaying(false)
+              setCurrentSound(null)
+              if (sourceNodeRef.current) {
+                sourceNodeRef.current.stop()
+                sourceNodeRef.current = null
               }
+              if (intervalRef.current) {
+                clearInterval(intervalRef.current)
+              }
+              return 0
             }
-            return newTime
+            return isLooping ? newTime % sound.duration : newTime
           })
         }, 1000)
 
-        // Guardar referencia
-        audioRef.current = {
-          pause: () => oscillator.stop(),
-          volume: gainNode.gain.value
-        } as any
+      } else {
+        throw new Error('No se pudo generar el audio')
       }
 
     } catch (error) {
       console.error('Error reproduciendo sonido:', error)
-      // Mostrar mensaje de error al usuario
       alert('No se pudo reproducir el sonido. Asegúrate de que tu navegador permita la reproducción de audio.')
       setIsPlaying(false)
       setCurrentSound(null)
@@ -603,9 +529,9 @@ export default function BabySerenityMethod() {
   }
 
   const stopSound = () => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current = null
+    if (sourceNodeRef.current) {
+      sourceNodeRef.current.stop()
+      sourceNodeRef.current = null
     }
     setIsPlaying(false)
     setCurrentSound(null)
@@ -641,8 +567,8 @@ export default function BabySerenityMethod() {
 
   // Actualizar volumen cuando cambie
   useEffect(() => {
-    if (audioRef.current && audioRef.current.volume !== undefined) {
-      audioRef.current.volume = volume[0] / 100
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = volume[0] / 100
     }
   }, [volume])
 
@@ -660,8 +586,11 @@ export default function BabySerenityMethod() {
       if (intervalRef.current) {
         clearInterval(intervalRef.current)
       }
-      if (audioRef.current) {
-        audioRef.current.pause()
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.stop()
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close()
       }
     }
   }, [])
